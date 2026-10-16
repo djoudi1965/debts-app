@@ -1,9 +1,17 @@
 import flet as ft
 import sqlite3
+import os
 from datetime import datetime
 
-def init_db():
-    conn = sqlite3.connect("debts.db")
+def get_db_path(page: ft.Page):
+    # Utilise le stockage persistant autorisé sur Android
+    data_dir = page.client_storage.get("app_data_dir")
+    if not data_dir:
+        data_dir = os.getcwd()
+    return os.path.join(data_dir, "debts.db")
+
+def init_db(db_path):
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS debts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,151 +25,205 @@ def init_db():
     conn.close()
 
 def main(page: ft.Page):
-    init_db()
-    page.title = "إدارة الديون"
+    db_path = get_db_path(page)
+    init_db(db_path)
+
+    page.title = "دفتر الديون"
     page.theme_mode = ft.ThemeMode.DARK
     page.rtl = True
     page.scroll = ft.ScrollMode.AUTO
-    page.padding = 10
+    page.padding = 15
 
-    # حقول الإدخال بتنسيق عمودي مناسب للهاتف
+    editing_id = {"value": None}
+
     date_field = ft.TextField(
-        label="التاريخ", 
-        value=datetime.now().strftime("%Y-%m-%d"), 
+        label="التاريخ",
+        value=datetime.now().strftime("%Y-%m-%d"),
         dense=True,
         text_size=14
     )
     creditor_field = ft.TextField(
-        label="اسم الدائن", 
+        label="اسم الدائن",
         dense=True,
         text_size=14
     )
     total_field = ft.TextField(
-        label="المبلغ الكلي (دج)", 
-        keyboard_type=ft.KeyboardType.NUMBER, 
+        label="المبلغ الكلي (دج)",
+        keyboard_type=ft.KeyboardType.NUMBER,
         dense=True,
         text_size=14
     )
     paid_field = ft.TextField(
-        label="المبلغ المدفوع (دج)", 
-        keyboard_type=ft.KeyboardType.NUMBER, 
+        label="المبلغ المدفوع (دج)",
+        keyboard_type=ft.KeyboardType.NUMBER,
         dense=True,
         text_size=14
     )
 
     remaining_text = ft.Text("الباقي: 0.00 دج", size=15, weight=ft.FontWeight.BOLD, color=ft.colors.ORANGE_400)
-    total_debts_card = ft.Text("إجمالي الديون المتبقية: 0.00 دج", size=15, weight=ft.FontWeight.BOLD, color=ft.colors.RED_400)
+    total_debts_card = ft.Text("إجمالي الديون المتبقية: 0.00 دج", size=16, weight=ft.FontWeight.BOLD, color=ft.colors.RED_400)
 
-    def calculate_remaining(e):
+    def calculate_remaining(e=None):
         try:
-            total = float(total_field.value or 0)
-            paid = float(paid_field.value or 0)
-            remaining_text.value = f"الباقي: {total - paid:,.2f} دج"
-        except ValueError:
-            remaining_text.value = "الباقي: خطأ في الحساب"
+            t = float(str(total_field.value or "0").replace(",", "."))
+            p = float(str(paid_field.value or "0").replace(",", "."))
+            rem = t - p
+            remaining_text.value = f"الباقي: {rem:,.2f} دج"
+        except Exception:
+            remaining_text.value = "الباقي: 0.00 دج"
         page.update()
 
     total_field.on_change = calculate_remaining
     paid_field.on_change = calculate_remaining
 
-    # جدول يدعم السحب الأفقي عند صغر الشاشة
-    table = ft.DataTable(
-        column_spacing=12,
-        heading_row_height=38,
-        data_row_min_height=36,
-        columns=[
-            ft.DataColumn(ft.Text("الدائن", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("الكلي", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("المدفوع", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("المتبقي", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("حذف")),
-        ],
-        rows=[]
-    )
-
-    table_container = ft.Row([table], scroll=ft.ScrollMode.ALWAYS)
+    list_container = ft.Column(spacing=10)
 
     def load_data():
-        table.rows.clear()
-        conn = sqlite3.connect("debts.db")
+        list_container.controls.clear()
+        conn = sqlite3.connect(db_path)
         c = conn.cursor()
         c.execute("SELECT id, date, creditor, total_amount, paid_amount, remaining FROM debts ORDER BY id DESC")
         rows = c.fetchall()
-        
+
         sum_remaining = 0.0
         for r in rows:
-            record_id, r_date, r_creditor, r_total, r_paid, r_rem = r
-            sum_remaining += r_rem
+            rec_id, r_date, r_cred, r_tot, r_paid, r_rem = r
+            sum_remaining += float(r_rem or 0)
 
-            def delete_record(e, rec_id=record_id):
-                del_conn = sqlite3.connect("debts.db")
-                del_c = del_conn.cursor()
-                del_c.execute("DELETE FROM debts WHERE id = ?", (rec_id,))
-                del_conn.commit()
-                del_conn.close()
-                load_data()
+            def make_delete(current_id):
+                return lambda e: delete_debt(current_id)
 
-            table.rows.append(
-                ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(str(r_creditor), size=13)),
-                    ft.DataCell(ft.Text(f"{r_total:,.0f}", size=13)),
-                    ft.DataCell(ft.Text(f"{r_paid:,.0f}", size=13)),
-                    ft.DataCell(ft.Text(f"{r_rem:,.0f}", color=ft.colors.RED_300, weight=ft.FontWeight.BOLD, size=13)),
-                    ft.DataCell(
-                        ft.IconButton(
-                            icon=ft.icons.DELETE_OUTLINE, 
-                            icon_color=ft.colors.RED_400, 
-                            icon_size=18,
-                            on_click=delete_record
-                        )
-                    ),
-                ])
+            def make_edit(item_id, d, cred, tot, pd):
+                return lambda e: start_edit(item_id, d, cred, tot, pd)
+
+            card = ft.Card(
+                elevation=2,
+                content=ft.Container(
+                    padding=10,
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Text(f"{r_cred}", size=16, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_200),
+                            ft.Text(f"{r_date}", size=12, color=ft.colors.GREY_400),
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.Text(f"الكلي: {r_tot:,.0f} دج", size=13),
+                            ft.Text(f"المدفوع: {r_paid:,.0f} دج", size=13, color=ft.colors.GREEN_300),
+                            ft.Text(f"الباقي: {r_rem:,.0f} دج", size=13, weight=ft.FontWeight.BOLD, color=ft.colors.RED_300),
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.TextButton("تعديل", icon=ft.icons.EDIT, on_click=make_edit(rec_id, r_date, r_cred, r_tot, r_paid)),
+                            ft.TextButton("حذف", icon=ft.icons.DELETE, icon_color=ft.colors.RED_400, on_click=make_delete(rec_id)),
+                        ], alignment=ft.MainAxisAlignment.END)
+                    ])
+                )
             )
+            list_container.controls.append(card)
+
         total_debts_card.value = f"إجمالي الديون المتبقية: {sum_remaining:,.2f} دج"
         conn.close()
         page.update()
 
-    def add_debt(e):
-        if not creditor_field.value or not total_field.value:
-            return
-        total = float(total_field.value or 0)
-        paid = float(paid_field.value or 0)
-        rem = total - paid
+    def start_edit(item_id, d, cred, tot, pd):
+        editing_id["value"] = item_id
+        date_field.value = str(d)
+        creditor_field.value = str(cred)
+        total_field.value = str(tot)
+        paid_field.value = str(pd)
+        calculate_remaining()
+        submit_btn.text = "تحديث الدين"
+        submit_btn.icon = ft.icons.CHECK
+        cancel_btn.visible = True
+        page.update()
 
-        conn = sqlite3.connect("debts.db")
-        c = conn.cursor()
-        c.execute("INSERT INTO debts (date, creditor, total_amount, paid_amount, remaining) VALUES (?, ?, ?, ?, ?)",
-                  (date_field.value, creditor_field.value, total, paid, rem))
-        conn.commit()
-        conn.close()
+    def cancel_edit(e):
+        reset_form()
 
+    def reset_form():
+        editing_id["value"] = None
         creditor_field.value = ""
         total_field.value = ""
         paid_field.value = ""
+        date_field.value = datetime.now().strftime("%Y-%m-%d")
         remaining_text.value = "الباقي: 0.00 دج"
+        submit_btn.text = "إضافة الدين"
+        submit_btn.icon = ft.icons.ADD
+        cancel_btn.visible = False
+        page.update()
+
+    def delete_debt(rec_id):
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute("DELETE FROM debts WHERE id = ?", (rec_id,))
+        conn.commit()
+        conn.close()
+        if editing_id["value"] == rec_id:
+            reset_form()
         load_data()
 
-    add_btn = ft.ElevatedButton("إضافة الدين", icon=ft.icons.ADD, on_click=add_debt, width=400)
+    def save_debt(e):
+        if not creditor_field.value or not total_field.value:
+            page.snack_bar = ft.SnackBar(ft.Text("يرجى ملء اسم الدائن والمبلغ الكلي"), open=True)
+            page.update()
+            return
+
+        try:
+            t = float(str(total_field.value).replace(",", "."))
+            p = float(str(paid_field.value or "0").replace(",", "."))
+        except ValueError:
+            page.snack_bar = ft.SnackBar(ft.Text("يرجى إدخال أرقام صحيحة للمبالغ"), open=True)
+            page.update()
+            return
+
+        rem = t - p
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+
+        if editing_id["value"] is None:
+            c.execute("""INSERT INTO debts (date, creditor, total_amount, paid_amount, remaining)
+                         VALUES (?, ?, ?, ?, ?)""",
+                      (date_field.value, creditor_field.value.strip(), t, p, rem))
+        else:
+            c.execute("""UPDATE debts SET date=?, creditor=?, total_amount=?, paid_amount=?, remaining=?
+                         WHERE id=?""",
+                      (date_field.value, creditor_field.value.strip(), t, p, rem, editing_id["value"]))
+
+        conn.commit()
+        conn.close()
+        reset_form()
+        load_data()
+
+    submit_btn = ft.ElevatedButton("إضافة الدين", icon=ft.icons.ADD, on_click=save_debt, expand=True)
+    cancel_btn = ft.OutlinedButton("إلغاء", icon=ft.icons.CLOSE, on_click=cancel_edit, visible=False)
 
     header = ft.Container(
         content=ft.Column([
             ft.Row([
                 ft.Icon(ft.icons.ACCOUNT_BALANCE_WALLET, color=ft.colors.BLUE_400),
-                ft.Text("دفتر الديون", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text("دفتر الديون", size=22, weight=ft.FontWeight.BOLD),
             ], alignment=ft.MainAxisAlignment.CENTER),
             ft.Text("بشير جودي", size=12, color=ft.colors.GREY_400, text_align=ft.TextAlign.CENTER)
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-        padding=10
+        padding=ft.padding.only(bottom=10)
     )
 
     page.add(
-        ft.Column([
-            header,
-            ft.Card(content=ft.Container(content=ft.Column([date_field, creditor_field, total_field, paid_field, remaining_text, add_btn]), padding=12)),
-            ft.Container(content=total_debts_card, alignment=ft.alignment.center, padding=5),
-            ft.Text("سجل الديون:", size=15, weight=ft.FontWeight.BOLD),
-            table_container
-        ])
+        header,
+        ft.Card(
+            content=ft.Container(
+                padding=12,
+                content=ft.Column([
+                    date_field,
+                    creditor_field,
+                    total_field,
+                    paid_field,
+                    ft.Container(content=remaining_text, alignment=ft.alignment.center),
+                    ft.Row([submit_btn, cancel_btn], spacing=10)
+                ], spacing=10)
+            )
+        ),
+        ft.Container(content=total_debts_card, alignment=ft.alignment.center, padding=10),
+        ft.Text("قائمة الديون المسجلة:", size=16, weight=ft.FontWeight.BOLD),
+        list_container
     )
 
     load_data()
