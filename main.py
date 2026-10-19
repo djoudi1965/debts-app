@@ -4,13 +4,19 @@ import os
 from datetime import datetime
 
 def get_db_path():
-    # المسار الدائم الخاص بالتطبيق على نظام أندرويد لضمان عدم مسح البيانات
-    app_data = os.getenv("FLET_APP_STORAGE_DATA_DIR")
-    if not app_data:
-        app_data = os.path.expanduser("~")
+    # البحث عن المسار الدائم والآمن في أندرويد مع مسار احتياطي موثوق
+    possible_dir = os.environ.get("FLET_APP_STORAGE_DATA_DIR")
+    if not possible_dir:
+        possible_dir = os.environ.get("EXTERNAL_STORAGE")
+    if not possible_dir:
+        possible_dir = os.path.expanduser("~")
     
-    os.makedirs(app_data, exist_ok=True)
-    return os.path.join(app_data, "debts_permanent.db")
+    try:
+        os.makedirs(possible_dir, exist_ok=True)
+        return os.path.join(possible_dir, "debts_data.db")
+    except Exception:
+        # مسار محلي احتياطي مباشر يضمن عمل التطبيق دون توقف
+        return "debts_data.db"
 
 def init_db(db_path):
     conn = sqlite3.connect(db_path)
@@ -27,8 +33,12 @@ def init_db(db_path):
     conn.close()
 
 def main(page: ft.Page):
-    db_path = get_db_path()
-    init_db(db_path)
+    try:
+        db_path = get_db_path()
+        init_db(db_path)
+    except Exception:
+        db_path = "debts_data.db"
+        init_db(db_path)
 
     page.title = "دفتر الديون"
     page.theme_mode = ft.ThemeMode.DARK
