@@ -3,12 +3,14 @@ import sqlite3
 import os
 from datetime import datetime
 
-def get_db_path(page: ft.Page):
-    # Utilise le stockage persistant autorisé sur Android
-    data_dir = page.client_storage.get("app_data_dir")
-    if not data_dir:
-        data_dir = os.getcwd()
-    return os.path.join(data_dir, "debts.db")
+def get_db_path():
+    # المسار الدائم الخاص بالتطبيق على نظام أندرويد لضمان عدم مسح البيانات
+    app_data = os.getenv("FLET_APP_STORAGE_DATA_DIR")
+    if not app_data:
+        app_data = os.path.expanduser("~")
+    
+    os.makedirs(app_data, exist_ok=True)
+    return os.path.join(app_data, "debts_permanent.db")
 
 def init_db(db_path):
     conn = sqlite3.connect(db_path)
@@ -25,7 +27,7 @@ def init_db(db_path):
     conn.close()
 
 def main(page: ft.Page):
-    db_path = get_db_path(page)
+    db_path = get_db_path()
     init_db(db_path)
 
     page.title = "دفتر الديون"
