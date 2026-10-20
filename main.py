@@ -1,51 +1,16 @@
 import flet as ft
-import sqlite3
-import os
 from datetime import datetime
-
-def get_database_path():
-    # البحث عن المسار الداخلي الثابت لتطبيق الأندرويد
-    # في نظام أندرويد يكون المسار دائماً تحت /data/data/<package_name>/files
-    base_dir = os.environ.get("ANDROID_DATA")
-    if base_dir:
-        # بيئة أندرويد حقيقية
-        app_dir = os.path.join(base_dir, "data", "dz.djoudi.debtsapp", "files")
-    else:
-        app_dir = os.path.expanduser("~")
-
-    # إذا تعذر الوصول للمسار السابق، نستخدم مجلد التخزين الداخلي القياسي
-    if not os.path.exists(app_dir):
-        try:
-            os.makedirs(app_dir, exist_ok=True)
-        except Exception:
-            app_dir = os.path.dirname(os.path.abspath(__file__))
-
-    return os.path.join(app_dir, "permanent_debts_v1.db")
-
-def init_db(db_path):
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS debts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date TEXT,
-                    creditor TEXT,
-                    total_amount REAL,
-                    paid_amount REAL,
-                    remaining REAL
-                )""")
-    conn.commit()
-    conn.close()
+import json
 
 def main(page: ft.Page):
-    # تحديد المسار الثابت لقاعدة البيانات
-    db_path = get_database_path()
-    init_db(db_path)
-
     page.title = "دفتر الديون"
     page.theme_mode = ft.ThemeMode.DARK
     page.rtl = True
     page.scroll = ft.ScrollMode.AUTO
     page.padding = 15
+
+    # استرجاع البيانات المحفوظة في ذاكرة الهاتف الدائمة (SharedPreferences)
+    debts_data = page.client_storage.get("user_debts_list") or []
 
     editing_id = {"value": None}
 
@@ -91,17 +56,22 @@ def main(page: ft.Page):
 
     list_container = ft.Column(spacing=10)
 
+    def save_to_storage():
+        page.client_storage.set("user_debts_list", debts_data)
+
     def load_data():
         list_container.controls.clear()
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        c.execute("SELECT id, date, creditor, total_amount, paid_amount, remaining FROM debts ORDER BY id DESC")
-        rows = c.fetchall()
-
         sum_remaining = 0.0
-        for r in rows:
-            rec_id, r_date, r_cred, r_tot, r_paid, r_rem = r
-            sum_remaining += float(r_rem or 0)
+
+        for r in debts_data:
+            rec_id = r.get("id")
+            r_date = r.get("date", "")
+            r_cred = r.get("creditor", "")
+            r_tot = float(r.get("total_amount", 0))
+            r_paid = float(r.get("paid_amount", 0))
+            r_rem = float(r.get("remaining", 0))
+
+            sum_remaining += r_rem
 
             def make_delete(current_id):
                 return lambda e: delete_debt(current_id)
@@ -133,7 +103,6 @@ def main(page: ft.Page):
             list_container.controls.append(card)
 
         total_debts_card.value = f"إجمالي الديون المتبقية: {sum_remaining:,.2f} دج"
-        conn.close()
         page.update()
 
     def start_edit(item_id, d, cred, tot, pd):
@@ -164,16 +133,15 @@ def main(page: ft.Page):
         page.update()
 
     def delete_debt(rec_id):
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        c.execute("DELETE FROM debts WHERE id = ?", (rec_id,))
-        conn.commit()
-        conn.close()
+        nonlocal debts_data
+        debts_data = [item for item in debts_data if item.get("id") != rec_id]
+        save_to_storage()
         if editing_id["value"] == rec_id:
             reset_form()
         load_data()
 
     def save_debt(e):
+        nonlocal debts_data
         if not creditor_field.value or not total_field.value:
             page.snack_bar = ft.SnackBar(ft.Text("يرجى ملء اسم الدائن والمبلغ الكلي"), open=True)
             page.update()
@@ -188,20 +156,31 @@ def main(page: ft.Page):
             return
 
         rem = t - p
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
 
         if editing_id["value"] is None:
-            c.execute("""INSERT INTO debts (date, creditor, total_amount, paid_amount, remaining)
-                         VALUES (?, ?, ?, ?, ?)""",
-                      (date_field.value, creditor_field.value.strip(), t, p, rem))
+            # إضافة عنصر جديد
+            new_id = int(datetime.now().timestamp() * 1000)
+            new_item = {
+                "id": new_id,
+                "date": date_field.value,
+                "creditor": creditor_field.value.strip(),
+                "total_amount": t,
+                "paid_amount": p,
+                "remaining": rem
+            }
+            debts_data.insert(0, new_item)
         else:
-            c.execute("""UPDATE debts SET date=?, creditor=?, total_amount=?, paid_amount=?, remaining=?
-                         WHERE id=?""",
-                      (date_field.value, creditor_field.value.strip(), t, p, rem, editing_id["value"]))
+            # تحديث عنصر حالي
+            for item in debts_data:
+                if item.get("id") == editing_id["value"]:
+                    item["date"] = date_field.value
+                    item["creditor"] = creditor_field.value.strip()
+                    item["total_amount"] = t
+                    item["paid_amount"] = p
+                    item["remaining"] = rem
+                    break
 
-        conn.commit()
-        conn.close()
+        save_to_storage()
         reset_form()
         load_data()
 
