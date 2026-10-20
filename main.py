@@ -3,20 +3,24 @@ import sqlite3
 import os
 from datetime import datetime
 
-def get_db_path():
-    # البحث عن المسار الدائم والآمن في أندرويد مع مسار احتياطي موثوق
-    possible_dir = os.environ.get("FLET_APP_STORAGE_DATA_DIR")
-    if not possible_dir:
-        possible_dir = os.environ.get("EXTERNAL_STORAGE")
-    if not possible_dir:
-        possible_dir = os.path.expanduser("~")
-    
-    try:
-        os.makedirs(possible_dir, exist_ok=True)
-        return os.path.join(possible_dir, "debts_data.db")
-    except Exception:
-        # مسار محلي احتياطي مباشر يضمن عمل التطبيق دون توقف
-        return "debts_data.db"
+def get_database_path():
+    # البحث عن المسار الداخلي الثابت لتطبيق الأندرويد
+    # في نظام أندرويد يكون المسار دائماً تحت /data/data/<package_name>/files
+    base_dir = os.environ.get("ANDROID_DATA")
+    if base_dir:
+        # بيئة أندرويد حقيقية
+        app_dir = os.path.join(base_dir, "data", "dz.djoudi.debtsapp", "files")
+    else:
+        app_dir = os.path.expanduser("~")
+
+    # إذا تعذر الوصول للمسار السابق، نستخدم مجلد التخزين الداخلي القياسي
+    if not os.path.exists(app_dir):
+        try:
+            os.makedirs(app_dir, exist_ok=True)
+        except Exception:
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+
+    return os.path.join(app_dir, "permanent_debts_v1.db")
 
 def init_db(db_path):
     conn = sqlite3.connect(db_path)
@@ -33,12 +37,9 @@ def init_db(db_path):
     conn.close()
 
 def main(page: ft.Page):
-    try:
-        db_path = get_db_path()
-        init_db(db_path)
-    except Exception:
-        db_path = "debts_data.db"
-        init_db(db_path)
+    # تحديد المسار الثابت لقاعدة البيانات
+    db_path = get_database_path()
+    init_db(db_path)
 
     page.title = "دفتر الديون"
     page.theme_mode = ft.ThemeMode.DARK
