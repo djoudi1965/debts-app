@@ -1,6 +1,49 @@
 import flet as ft
 from datetime import datetime
 import json
+import os
+
+# تحديد مسار التخزين الدائم لنظام أندرويد
+def get_storage_file():
+    # 1. المسار الرسمي لتخزين تطبيقات أندرويد الداخلية
+    android_path = "/data/data/dz.djoudi.debtsapp/files"
+    if os.path.exists("/data/data/dz.djoudi.debtsapp"):
+        try:
+            os.makedirs(android_path, exist_ok=True)
+            return os.path.join(android_path, "debts_store.json")
+        except Exception:
+            pass
+
+    # 2. مسار احتياطي موثوق عبر FLET_APP_STORAGE_DATA_DIR إن وجد
+    env_dir = os.environ.get("FLET_APP_STORAGE_DATA_DIR")
+    if env_dir:
+        try:
+            os.makedirs(env_dir, exist_ok=True)
+            return os.path.join(env_dir, "debts_store.json")
+        except Exception:
+            pass
+
+    # 3. مسار المستندات المحلي
+    home_dir = os.path.expanduser("~")
+    return os.path.join(home_dir, "debts_store.json")
+
+DATA_FILE = get_storage_file()
+
+def read_debts():
+    if not os.path.exists(DATA_FILE):
+        return []
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def write_debts(data):
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 def main(page: ft.Page):
     page.title = "دفتر الديون"
@@ -9,9 +52,7 @@ def main(page: ft.Page):
     page.scroll = ft.ScrollMode.AUTO
     page.padding = 15
 
-    # استرجاع البيانات المحفوظة في ذاكرة الهاتف الدائمة (SharedPreferences)
-    debts_data = page.client_storage.get("user_debts_list") or []
-
+    debts_data = read_debts()
     editing_id = {"value": None}
 
     date_field = ft.TextField(
@@ -55,9 +96,6 @@ def main(page: ft.Page):
     paid_field.on_change = calculate_remaining
 
     list_container = ft.Column(spacing=10)
-
-    def save_to_storage():
-        page.client_storage.set("user_debts_list", debts_data)
 
     def load_data():
         list_container.controls.clear()
@@ -135,7 +173,7 @@ def main(page: ft.Page):
     def delete_debt(rec_id):
         nonlocal debts_data
         debts_data = [item for item in debts_data if item.get("id") != rec_id]
-        save_to_storage()
+        write_debts(debts_data)
         if editing_id["value"] == rec_id:
             reset_form()
         load_data()
@@ -158,7 +196,6 @@ def main(page: ft.Page):
         rem = t - p
 
         if editing_id["value"] is None:
-            # إضافة عنصر جديد
             new_id = int(datetime.now().timestamp() * 1000)
             new_item = {
                 "id": new_id,
@@ -170,7 +207,6 @@ def main(page: ft.Page):
             }
             debts_data.insert(0, new_item)
         else:
-            # تحديث عنصر حالي
             for item in debts_data:
                 if item.get("id") == editing_id["value"]:
                     item["date"] = date_field.value
@@ -180,7 +216,7 @@ def main(page: ft.Page):
                     item["remaining"] = rem
                     break
 
-        save_to_storage()
+        write_debts(debts_data)
         reset_form()
         load_data()
 
